@@ -1,0 +1,122 @@
+{
+  "name": "Spotify Graph query",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "operation"
+            },
+            {
+              "name": "name"
+            },
+            {
+              "name": "limit",
+              "type": "number"
+            }
+          ]
+        }
+      },
+      "id": "c3000000-0000-4000-8000-000000000001",
+      "typeVersion": 1.1,
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const inp = $input.first().json;\nconst operation = String(inp.operation ?? \"\").trim();\nconst name = String(inp.name ?? \"\").trim();\n\nlet limit = Number(inp.limit);\nlimit = Number.isFinite(limit) && limit > 0 ? Math.min(20, Math.round(limit)) : 10;\n\nconst OPS = {\n  tracks_by_artist: `\n    MATCH (t:Track)-[:PERFORMED_BY]->(a:Artist)\n    WHERE toLower(a.name) CONTAINS toLower($name)\n    OPTIONAL MATCH (t)-[:IN_GENRE]->(g:Genre)\n    OPTIONAL MATCH (t)-[:ON_ALBUM]->(al:Album)\n    RETURN t.track_id AS track_id, t.title AS title, a.name AS artist, g.name AS genre,\n           al.name AS album, t.release_year AS release_year, t.popularity AS popularity\n    ORDER BY (toLower(a.name) = toLower($name)) DESC, t.popularity DESC\n    LIMIT $limit`,\n\n  genres_of_artist: `\n    MATCH (a:Artist)<-[:PERFORMED_BY]-(t:Track)-[:IN_GENRE]->(g:Genre)\n    WHERE toLower(a.name) CONTAINS toLower($name)\n    RETURN a.name AS artist, g.name AS genre, count(t) AS tracks\n    ORDER BY tracks DESC\n    LIMIT $limit`,\n\n  artists_in_genre: `\n    MATCH (a:Artist)-[:PLAYS_GENRE]->(g:Genre)\n    WHERE toLower(g.name) = toLower($name)\n    MATCH (a)<-[:PERFORMED_BY]-(t:Track)\n    RETURN g.name AS genre, a.name AS artist, count(t) AS tracks\n    ORDER BY tracks DESC\n    LIMIT $limit`,\n\n  subgenres_in_genre: `\n    MATCH (s:Subgenre)-[:PART_OF]->(g:Genre)\n    WHERE toLower(g.name) = toLower($name)\n    MATCH (t:Track)-[:HAS_SUBGENRE]->(s)\n    RETURN g.name AS genre, s.name AS subgenre, count(t) AS tracks\n    ORDER BY tracks DESC\n    LIMIT $limit`,\n\n  top_tracks_in_genre: `\n    MATCH (t:Track)-[:IN_GENRE]->(g:Genre)\n    WHERE toLower(g.name) = toLower($name)\n    MATCH (t)-[:PERFORMED_BY]->(a:Artist)\n    RETURN t.track_id AS track_id, t.title AS title, a.name AS artist, g.name AS genre,\n           t.popularity AS popularity, t.release_year AS release_year\n    ORDER BY t.popularity DESC\n    LIMIT $limit`,\n\n  tracks_on_album: `\n    MATCH (t:Track)-[:ON_ALBUM]->(al:Album)\n    WHERE toLower(al.name) CONTAINS toLower($name)\n    MATCH (t)-[:PERFORMED_BY]->(a:Artist)\n    RETURN t.track_id AS track_id, t.title AS title, a.name AS artist, al.name AS album,\n           al.release_year AS release_year\n    ORDER BY al.name, t.title\n    LIMIT $limit`,\n\n  tracks_by_year: `\n    MATCH (y:Year {value: toInteger($name)})<-[:RELEASED_IN]-(al:Album)<-[:ON_ALBUM]-(t:Track)\n    MATCH (t)-[:PERFORMED_BY]->(a:Artist)\n    RETURN y.value AS year, t.track_id AS track_id, t.title AS title, a.name AS artist,\n           al.name AS album, t.popularity AS popularity\n    ORDER BY t.popularity DESC\n    LIMIT $limit`,\n\n  similar_tracks: `\n    MATCH (seed:Track)\n    WHERE toLower(seed.title) CONTAINS toLower($name)\n    WITH seed ORDER BY (toLower(seed.title) = toLower($name)) DESC, seed.popularity DESC\n    LIMIT 1\n    MATCH (seed)-[s:SIMILAR_TO]-(o:Track)-[:PERFORMED_BY]->(a:Artist)\n    RETURN seed.track_id AS seed_track_id, seed.title AS seed_title,\n           o.track_id AS track_id, o.title AS title, a.name AS artist,\n           round(s.score * 1000) / 1000 AS similarity\n    ORDER BY s.score DESC\n    LIMIT $limit`,\n\n  related_artists: `\n    MATCH (a:Artist)<-[:PERFORMED_BY]-(t:Track)-[s:SIMILAR_TO]-(u:Track)-[:PERFORMED_BY]->(o:Artist)\n    WHERE toLower(a.name) CONTAINS toLower($name) AND o <> a\n    RETURN a.name AS artist, o.name AS related_artist,\n           count(*) AS similar_track_links, round(avg(s.score) * 1000) / 1000 AS avg_similarity\n    ORDER BY similar_track_links DESC\n    LIMIT $limit`,\n\n  artists_sharing_genre: `\n    MATCH (a:Artist)-[:PLAYS_GENRE]->(g:Genre)<-[:PLAYS_GENRE]-(o:Artist)\n    WHERE toLower(a.name) CONTAINS toLower($name) AND o <> a\n    RETURN a.name AS artist, o.name AS other_artist, collect(DISTINCT g.name) AS shared_genres\n    ORDER BY size(shared_genres) DESC\n    LIMIT $limit`\n};\n\nif (!OPS[operation]) {\n  throw new Error(`Ukendt operation '${operation}'. Gyldige: ${Object.keys(OPS).join(\", \")}`);\n}\nif (!name) throw new Error(\"Input 'name' mangler.\");\n\nreturn [{ json: {\n  neo4jBody: { statements: [{ statement: OPS[operation], parameters: { name, limit } }] },\n  meta: { source: \"Neo4j graph traversal (\" + operation + \")\",\n          info: { operation, name } }\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        0
+      ],
+      "id": "c3000000-0000-4000-8000-000000000002",
+      "name": "Build query"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:7474/db/neo4j/tx/commit",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.neo4jBody) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        448,
+        0
+      ],
+      "id": "c3000000-0000-4000-8000-000000000003",
+      "name": "Query Neo4j",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "2cmruuvkDMzcvIBw",
+          "name": "Unnamed credential"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "if ($json.errors?.length) {\n  throw new Error(\"Neo4j fejl: \" + JSON.stringify($json.errors));\n}\nconst result = $json.results?.[0];\nconst columns = result?.columns ?? [];\nconst rows = (result?.data ?? []).map(item =>\n  Object.fromEntries(columns.map((c, i) => [c, item.row[i]]))\n);\nconst meta = $('Build query').first().json.meta;\n\nreturn [{ json: {\n  source: meta.source,\n  ...meta.info,\n  count: rows.length,\n  results: rows,\n  note: rows.length === 0\n    ? \"Ingen resultater i databasen. Fortæl brugeren det ærligt og foreslå en anden søgning.\"\n    : \"Brug kun disse resultater. Angiv track_id/kilde, når du citerer dem.\"\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        0
+      ],
+      "id": "c3000000-0000-4000-8000-000000000004",
+      "name": "Format output"
+    }
+  ],
+  "connections": {
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Build query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build query": {
+      "main": [
+        [
+          {
+            "node": "Query Neo4j",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query Neo4j": {
+      "main": [
+        [
+          {
+            "node": "Format output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}

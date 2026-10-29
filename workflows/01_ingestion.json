@@ -1,0 +1,392 @@
+{
+  "name": "Spotify ingestion (vector + graph)",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -400,
+        0
+      ],
+      "id": "a1000000-0000-4000-8000-000000000001",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:7474/db/neo4j/tx/commit",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"statements\": [{\"statement\": \"MATCH (n) DETACH DELETE n\"}]}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        -176,
+        0
+      ],
+      "id": "a1000000-0000-4000-8000-000000000002",
+      "name": "Wipe database",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "2cmruuvkDMzcvIBw",
+          "name": "Unnamed credential"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:7474/db/neo4j/tx/commit",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"statements\": [{\"statement\": \"CREATE CONSTRAINT track_id IF NOT EXISTS FOR (t:Track) REQUIRE t.track_id IS UNIQUE\"}, {\"statement\": \"CREATE CONSTRAINT album_id IF NOT EXISTS FOR (a:Album) REQUIRE a.album_id IS UNIQUE\"}, {\"statement\": \"CREATE CONSTRAINT artist_name IF NOT EXISTS FOR (a:Artist) REQUIRE a.name IS UNIQUE\"}, {\"statement\": \"CREATE CONSTRAINT genre_name IF NOT EXISTS FOR (g:Genre) REQUIRE g.name IS UNIQUE\"}, {\"statement\": \"CREATE CONSTRAINT subgenre_id IF NOT EXISTS FOR (s:Subgenre) REQUIRE s.id IS UNIQUE\"}, {\"statement\": \"CREATE CONSTRAINT year_value IF NOT EXISTS FOR (y:Year) REQUIRE y.value IS UNIQUE\"}, {\"statement\": \"CREATE VECTOR INDEX track_vibe_index IF NOT EXISTS FOR (t:Track) ON (t.embedding) OPTIONS {indexConfig: {`vector.dimensions`: 1536, `vector.similarity_function`: 'cosine'}}\"}]}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        48,
+        0
+      ],
+      "id": "a1000000-0000-4000-8000-000000000003",
+      "name": "Create schema",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "2cmruuvkDMzcvIBw",
+          "name": "Unnamed credential"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fileSelector": "/data/high_popularity_spotify_data.csv",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        272,
+        0
+      ],
+      "id": "a1000000-0000-4000-8000-000000000004",
+      "name": "Read/Write Files from Disk"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.2,
+      "position": [
+        496,
+        0
+      ],
+      "id": "a1000000-0000-4000-8000-000000000005",
+      "name": "Extract from File"
+    },
+    {
+      "parameters": {
+        "jsCode": "const clean = (v, fallback = \"\") =>\n  v === undefined || v === null || String(v).trim() === \"\"\n    ? fallback\n    : String(v).replace(/\\s+/g, \" \").trim();\n\nconst num = (v) => {\n  if (v === undefined || v === null || v === \"\") return null;\n  const n = Number(v);\n  return Number.isFinite(n) ? n : null;\n};\n\nconst level = (x, low, mid, high) =>\n  x === null ? \"\" : x < 0.33 ? low : x < 0.66 ? mid : high;\n\nconst seen = new Set();\nconst out = [];\n\nfor (const item of $input.all()) {\n  const r = item.json;\n  const track_id = clean(r.track_id || r.id);\n  if (!track_id || seen.has(track_id)) continue;\n  seen.add(track_id);\n\n  const title = clean(r.track_name, \"Ukendt titel\");\n  const artist = clean(r.track_artist, \"Ukendt kunstner\");\n  const genre = clean(r.playlist_genre, \"Ukendt genre\");\n  const subgenre = clean(r.playlist_subgenre, \"Ukendt subgenre\");\n  const album = clean(r.track_album_name, \"Ukendt album\");\n  const album_id = clean(r.track_album_id, `${album}|${artist}`);\n  const year = parseInt(String(r.track_album_release_date ?? \"\").substring(0, 4), 10);\n  const release_year = Number.isFinite(year) ? year : null;\n\n  const energy = num(r.energy);\n  const danceability = num(r.danceability);\n  const valence = num(r.valence);\n  const acousticness = num(r.acousticness);\n\n  const words = [\n    level(energy, \"rolig, lav energi\", \"middel energi\", \"energisk, høj energi\"),\n    level(danceability, \"ikke særlig dansbar\", \"nogenlunde dansbar\", \"meget dansbar\"),\n    level(valence, \"melankolsk, trist stemning\", \"neutral stemning\", \"glad, positiv stemning\"),\n    level(acousticness, \"elektronisk lyd\", \"\", \"akustisk lyd\"),\n  ].filter(Boolean).join(\", \");\n\n  const vibe_description =\n    `${genre} (${subgenre}) af ${artist} fra albummet ${album}` +\n    `${release_year ? ` (${release_year})` : \"\"}. Stemning: ${words}.`;\n\n  out.push({ json: {\n    track_id, title, artist, genre, subgenre,\n    subgenre_id: `${genre}/${subgenre}`,\n    album, album_id, release_year,\n    popularity: num(r.track_popularity),\n    energy, danceability, valence,\n    vibe_description,\n    chunk_text: `Titel: ${title}. Kunstner: ${artist}. ${vibe_description}`,\n  }});\n}\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        0
+      ],
+      "id": "a1000000-0000-4000-8000-000000000006",
+      "name": "Code A"
+    },
+    {
+      "parameters": {
+        "batchSize": 50,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        944,
+        0
+      ],
+      "id": "a1000000-0000-4000-8000-000000000007",
+      "name": "Loop Over Items"
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(i => i.json);\nreturn [{ json: {\n  rows,\n  embeddingBody: { model: \"text-embedding-3-small\", input: rows.map(r => r.chunk_text) }\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1168,
+        112
+      ],
+      "id": "a1000000-0000-4000-8000-000000000008",
+      "name": "Code B"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/embeddings",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.embeddingBody) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1392,
+        112
+      ],
+      "id": "a1000000-0000-4000-8000-000000000009",
+      "name": "HTTP Request",
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "maxTries": 5,
+      "credentials": {
+        "openAiApi": {
+          "id": "3wj1Y3EGRAXc3ySV",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $('Code B').first().json.rows;\nconst data = [...$json.data].sort((a, b) => a.index - b.index);\n\nif (data.length !== rows.length) {\n  throw new Error(`Fik ${data.length} embeddings for ${rows.length} rækker`);\n}\nrows.forEach((r, i) => {\n  r.embedding = data[i].embedding;\n  if (r.embedding.length !== 1536) throw new Error(`Forkert dimension: ${r.title}`);\n});\n\nconst statement = `\nUNWIND $rows AS row\nMERGE (t:Track {track_id: row.track_id})\nSET t.title = row.title,\n    t.release_year = row.release_year,\n    t.popularity = row.popularity,\n    t.energy = row.energy,\n    t.danceability = row.danceability,\n    t.valence = row.valence,\n    t.vibe_description = row.vibe_description,\n    t.chunk_text = row.chunk_text,\n    t.embedding = row.embedding,\n    t.source = 'high_popularity_spotify_data.csv'\n\nMERGE (a:Artist {name: row.artist})\nMERGE (t)-[:PERFORMED_BY]->(a)\n\nMERGE (g:Genre {name: row.genre})\nMERGE (t)-[:IN_GENRE]->(g)\nMERGE (a)-[:PLAYS_GENRE]->(g)\n\nMERGE (s:Subgenre {id: row.subgenre_id})\nSET s.name = row.subgenre\nMERGE (t)-[:HAS_SUBGENRE]->(s)\nMERGE (s)-[:PART_OF]->(g)\n\nMERGE (al:Album {album_id: row.album_id})\nSET al.name = row.album, al.release_year = row.release_year\nMERGE (t)-[:ON_ALBUM]->(al)\n\nFOREACH (_ IN CASE WHEN row.release_year IS NULL THEN [] ELSE [1] END |\n  MERGE (y:Year {value: row.release_year})\n  MERGE (al)-[:RELEASED_IN]->(y)\n)\nRETURN count(t) AS imported\n`;\n\nreturn [{ json: { neo4jBody: { statements: [{ statement, parameters: { rows } }] } } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1616,
+        112
+      ],
+      "id": "a1000000-0000-4000-8000-000000000010",
+      "name": "Code C"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:7474/db/neo4j/tx/commit",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.neo4jBody) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1840,
+        112
+      ],
+      "id": "a1000000-0000-4000-8000-000000000011",
+      "name": "Write to Neo4j",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "2cmruuvkDMzcvIBw",
+          "name": "Unnamed credential"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 1
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2064,
+        112
+      ],
+      "id": "a1000000-0000-4000-8000-000000000012",
+      "name": "Wait",
+      "webhookId": "a1000000-0000-4000-8000-0000000000aa"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:7474/db/neo4j/tx/commit",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\"statements\": [{\"statement\": \"MATCH (t:Track) CALL db.index.vector.queryNodes('track_vibe_index', 6, t.embedding) YIELD node, score WHERE node <> t AND score >= 0.85 MERGE (t)-[r:SIMILAR_TO]->(node) SET r.score = score\"}]}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1168,
+        -144
+      ],
+      "id": "a1000000-0000-4000-8000-000000000013",
+      "name": "Create SIMILAR_TO",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "2cmruuvkDMzcvIBw",
+          "name": "Unnamed credential"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Wipe database",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wipe database": {
+      "main": [
+        [
+          {
+            "node": "Create schema",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create schema": {
+      "main": [
+        [
+          {
+            "node": "Read/Write Files from Disk",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read/Write Files from Disk": {
+      "main": [
+        [
+          {
+            "node": "Extract from File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract from File": {
+      "main": [
+        [
+          {
+            "node": "Code A",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code A": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [
+          {
+            "node": "Create SIMILAR_TO",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code B",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code B": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Code C",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code C": {
+      "main": [
+        [
+          {
+            "node": "Write to Neo4j",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write to Neo4j": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}

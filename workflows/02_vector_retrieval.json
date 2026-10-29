@@ -1,0 +1,207 @@
+{
+  "name": "Spotify Vector search v2",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "query"
+            },
+            {
+              "name": "limit",
+              "type": "number"
+            },
+            {
+              "name": "genre"
+            },
+            {
+              "name": "min_energy",
+              "type": "number"
+            },
+            {
+              "name": "max_energy",
+              "type": "number"
+            },
+            {
+              "name": "min_danceability",
+              "type": "number"
+            },
+            {
+              "name": "max_danceability",
+              "type": "number"
+            },
+            {
+              "name": "min_valence",
+              "type": "number"
+            },
+            {
+              "name": "max_valence",
+              "type": "number"
+            }
+          ]
+        }
+      },
+      "id": "b2000000-0000-4000-8000-000000000001",
+      "typeVersion": 1.1,
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const inp = $input.first().json;\nconst query = String(inp.query ?? \"\").trim();\nif (!query) throw new Error(\"Input 'query' mangler.\");\n\nconst numOrNull = (v) => {\n  if (v === undefined || v === null || v === \"\") return null;\n  const n = Number(String(v).replace(\",\", \".\"));\n  return Number.isFinite(n) ? n : null;\n};\n// 0 betyder \"ikke angivet\" (modeller udfylder ofte 0 som standard)\nconst unit = (v) => {\n  const n = numOrNull(v);\n  return n === null || n <= 0 ? null : Math.min(1, n);\n};\n\nlet limit = numOrNull(inp.limit);\nlimit = limit ? Math.min(10, Math.max(1, Math.round(limit))) : 5;\n\nconst genre = String(inp.genre ?? \"\").trim() || null;\n\nconst filters = {\n  genre,\n  min_energy: unit(inp.min_energy),\n  max_energy: unit(inp.max_energy),\n  min_danceability: unit(inp.min_danceability),\n  max_danceability: unit(inp.max_danceability),\n  min_valence: unit(inp.min_valence),\n  max_valence: unit(inp.max_valence),\n};\n\nreturn [{ json: {\n  query, limit, filters,\n  embeddingBody: { model: \"text-embedding-3-small\", input: query }\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        0
+      ],
+      "id": "b2000000-0000-4000-8000-000000000002",
+      "name": "Prepare input"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/embeddings",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.embeddingBody) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        448,
+        0
+      ],
+      "id": "b2000000-0000-4000-8000-000000000003",
+      "name": "Embed query",
+      "credentials": {
+        "openAiApi": {
+          "id": "3wj1Y3EGRAXc3ySV",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const embedding = $json.data?.[0]?.embedding;\nif (!Array.isArray(embedding) || embedding.length !== 1536) {\n  throw new Error(\"Embedding mangler eller har forkert dimension.\");\n}\nconst { query, limit, filters } = $('Prepare input').first().json;\nconst hasFilter = Object.values(filters).some(v => v !== null);\nconst k = hasFilter ? 500 : limit;   // hent flere kandidater, hvis der skal filtreres bagefter\n\nconst statement = `\nCALL db.index.vector.queryNodes('track_vibe_index', $k, $embedding)\nYIELD node, score\nWHERE ($genre IS NULL OR EXISTS {\n        MATCH (node)-[:IN_GENRE]->(gg:Genre)\n        WHERE toLower(gg.name) = toLower($genre) })\n  AND ($minEnergy IS NULL OR node.energy >= $minEnergy)\n  AND ($maxEnergy IS NULL OR node.energy <= $maxEnergy)\n  AND ($minDance IS NULL OR node.danceability >= $minDance)\n  AND ($maxDance IS NULL OR node.danceability <= $maxDance)\n  AND ($minValence IS NULL OR node.valence >= $minValence)\n  AND ($maxValence IS NULL OR node.valence <= $maxValence)\nWITH node, score ORDER BY score DESC LIMIT $limit\nOPTIONAL MATCH (node)-[:PERFORMED_BY]->(a:Artist)\nOPTIONAL MATCH (node)-[:IN_GENRE]->(g:Genre)\nOPTIONAL MATCH (node)-[:ON_ALBUM]->(al:Album)\nRETURN node.track_id AS track_id,\n       node.title AS title,\n       a.name AS artist,\n       g.name AS genre,\n       al.name AS album,\n       node.release_year AS release_year,\n       node.energy AS energy,\n       node.danceability AS danceability,\n       node.valence AS valence,\n       round(score * 1000) / 1000 AS similarity,\n       [(node)-[:SIMILAR_TO]-(o:Track)-[:PERFORMED_BY]->(oa:Artist) | o.title + ' - ' + oa.name][..3] AS similar_via_graph\nORDER BY score DESC\n`;\n\nconst parameters = {\n  embedding, k, limit,\n  genre: filters.genre,\n  minEnergy: filters.min_energy, maxEnergy: filters.max_energy,\n  minDance: filters.min_danceability, maxDance: filters.max_danceability,\n  minValence: filters.min_valence, maxValence: filters.max_valence,\n};\n\nreturn [{ json: {\n  neo4jBody: { statements: [{ statement, parameters }] },\n  meta: { source: \"Neo4j vector index track_vibe_index (semantisk søgning)\",\n          info: { query, filters_applied: filters } }\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        0
+      ],
+      "id": "b2000000-0000-4000-8000-000000000004",
+      "name": "Build query"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:7474/db/neo4j/tx/commit",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.neo4jBody) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        896,
+        0
+      ],
+      "id": "b2000000-0000-4000-8000-000000000005",
+      "name": "Query Neo4j",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "2cmruuvkDMzcvIBw",
+          "name": "Unnamed credential"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "if ($json.errors?.length) {\n  throw new Error(\"Neo4j fejl: \" + JSON.stringify($json.errors));\n}\nconst result = $json.results?.[0];\nconst columns = result?.columns ?? [];\nconst rows = (result?.data ?? []).map(item =>\n  Object.fromEntries(columns.map((c, i) => [c, item.row[i]]))\n);\nconst meta = $('Build query').first().json.meta;\n\nreturn [{ json: {\n  source: meta.source,\n  ...meta.info,\n  count: rows.length,\n  results: rows,\n  note: rows.length === 0\n    ? \"Ingen resultater i databasen. Fortæl brugeren det ærligt og foreslå en anden søgning.\"\n    : \"Brug kun disse resultater. Angiv track_id/kilde, når du citerer dem.\"\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        0
+      ],
+      "id": "b2000000-0000-4000-8000-000000000006",
+      "name": "Format output"
+    }
+  ],
+  "connections": {
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Prepare input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare input": {
+      "main": [
+        [
+          {
+            "node": "Embed query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embed query": {
+      "main": [
+        [
+          {
+            "node": "Build query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build query": {
+      "main": [
+        [
+          {
+            "node": "Query Neo4j",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query Neo4j": {
+      "main": [
+        [
+          {
+            "node": "Format output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}
