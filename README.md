@@ -52,7 +52,7 @@ Kort fortalt:
 | 1 | Data ingestion (vektor + graf) | `workflows/01_ingestion.json` | `screenshots/01_ingestion_workflow.png` |
 | 2 | Vector retrieval (værktøj) | `workflows/02_vector_retrieval.json` | `screenshots/02_vector_retrieval_workflow.png` |
 | 3 | Graph retrieval (værktøj) | `workflows/03_graph_retrieval.json` | `screenshots/03_graph_retrieval_workflow.png` |
-| 4 | AI Agent | `workflows/04_agent.json` **[EKSPORTÉR fra n8n]** | `screenshots/04_agent_workflow.png` |
+| 4 | AI Agent | `workflows/04_agent.json`  | `screenshots/04_agent_workflow.png` |
 
 ### 4.1 Ingestion (workflow 1)
 
@@ -68,7 +68,7 @@ Manual Trigger → Wipe database → Create schema → Read file → Extract fro
 - **Dubletter:** dedupe på `track_id` i Code A, `MERGE` samt unikke constraints i Neo4j. "Wipe database"-noden giver en ren genstart (kan deaktiveres).
 - **Batches:** 50 sange pr. embedding-kald og ét `UNWIND`-statement pr. batch. Antallet af embeddings kontrolleres mod antallet af rækker (og dimensionen 1536), ellers stopper workflowet med en fejl.
 - **Metadata:** hver Track har `source` (kildefilen) og `track_id`, så svar kan spores tilbage.
-- **SIMILAR_TO:** `SIMILAR_TO`-trinnet kører en vektorsøgning pr. sang og kan time ud via HTTP-endpointet. **[TILPAS: beskriv hvad du gjorde, fx kørt i bidder eller direkte i Neo4j Browser med `neo4j/similar_to.cypher`.]**
+- **SIMILAR_TO:** `SIMILAR_TO`-trinnet kører en vektorsøgning pr. sang og kan time ud via HTTP-endpointet. for mig timede den ud, men havde stadig fået gjort det i neo4j, så den er også rød på ingestion workflow billedet
 
 ### 4.2 Vector retrieval (workflow 2): `search_tracks_by_vibe`
 
