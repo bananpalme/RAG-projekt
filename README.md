@@ -196,7 +196,7 @@ Inputs: `operation`, `name`, `limit`. Operationerne er hvidlistet (`tracks_by_ar
 - **Værktøjskald:** `query_music_graph` med `operation = genres_of_artist` og evt. `artists_sharing_genre`, `name = Bon Jovi`
 - **Hentet information:** først fandt den hvilke genre Bon Jovi har i datasættet, hvilket er rock og pop. så prøvede den artists_sharing_genre, men den er lavet forkert så i stedet for at finde kunstnere med samme genre så fandt den kunstnere der havde rock og pop i deres navn som fx Asap Rocky og Pop Smoke.
 - **Agentens svar:** Bon Jovi er knyttet til rock (3 spor) og pop (1 spor) i databasen. Jeg kan ikke pålideligt angive andre kunstnere, der deler genrerne: opslagene for rock og pop returnerede kunstnere, men viste hiphop som fælles genre og matchede ikke forespørgslen. 
-- **Vurdering:** Ja her er der fejl i hvordan den subworkflowet bruger artist_sharing_genre, hvis jeg havde lidt mere tid (har lidt travlt) så er det er forholdsvist hurtigt fiks
+- **Vurdering:** Ja her er der fejl i hvordan den subworkflowet bruger artist_sharing_genre, hvis jeg havde lidt mere tid (har lidt travlt) så er det er forholdsvist hurtigt fiks, udover det når man spørger den om fx sange med energi over 0,7 så giver den det, så grafsøgningen fungerer fint bare ikke denne specifikke artists_sharing_genre
 - Skærmbillede: `examples/example2_graph.png`
 
 ## 9. Kendte begrænsninger
