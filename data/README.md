@@ -1,6 +1,6 @@
 # Data
 
-- **Kilde:** `high_popularity_spotify_data.csv` ([INDSÆT link til datasættet, fx Kaggle]).
+- **Kilde:** `high_popularity_spotify_data.csv` https://www.kaggle.com/datasets/solomonameh/spotify-music-dataset.
 - **Rækker i CSV:** [INDSÆT]. **Unikke tracks i Neo4j:** 1437.
 - **Sample:** `sample.csv` = de første 10 rækker. Lav den med:
   `head -n 11 high_popularity_spotify_data.csv > data/sample.csv`
