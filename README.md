@@ -2,8 +2,6 @@
 
 Et AI-agentprojekt i n8n, hvor en agent besvarer spørgsmål om musik ved at kombinere **semantisk søgning** (vektorindeks) og **graf-traversering** i **samme Neo4j-database**.
 
-> Felter markeret **[INDSÆT ...]** skal udfyldes, før du afleverer.
-
 ## 1. Case og agentens rolle
 
 **Domæne:** Spotify-sange (`high_popularity_spotify_data.csv`, 1437 unikke tracks efter dublet-fjernelse). Musik passer godt til begge teknikker:
